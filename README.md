@@ -7,7 +7,7 @@ npm test
 npm start
 ```
 
-This service hands a browser a tightly scoped PUT URL for a developer-tool release asset. Infrai keeps the bucket setup and presigning behind one key, so the app server only validates release metadata and never touches the artifact bytes.
+This service gives a browser a narrowly scoped PUT URL for a developer-tool release asset. Infrai keeps bucket setup and presigning behind one key; the application server validates release metadata but never receives the artifact bytes.
 
 ## Send an upload intent
 
@@ -36,17 +36,17 @@ Expected result:
 }
 ```
 
-The browser then PUTs the file itself to `upload.url` with `PUT` and the returned content type. That's the gotcha worth repeating in the runbook: the presign request describes the upload, it does not carry file bytes.
+The browser then sends the file itself to `upload.url` with `PUT` and the returned content type. That distinction is the gotcha: the presign request describes the upload; it does not carry file bytes.
 
 ## Release boundary
 
-`uploadIntentSchema` accepts ZIP, gzip, and binary artifacts up to 25 MiB. It rejects unknown fields, unsafe identifier characters, empty values, and larger assets before requesting a URL. The object key binds the asset to its release and build, and the response exposes an `upload_authorized` event plus a terse diagnostic for build logs.
+`uploadIntentSchema` accepts ZIP, gzip, and binary artifacts up to 25 MiB. It rejects unknown fields, unsafe identifier characters, empty values, and larger assets before requesting a URL. The object key binds the asset to both its release and build, while the response exposes an `upload_authorized` event and a terse diagnostic suitable for build logs.
 
-The storage client sends an explicit method, reads the `{ok, data, error, metadata}` envelope, surfaces API errors, and backs off on HTTP 429. Presign retries use release, build, and asset identity as the idempotency key. Duplicate deliveries are avoided by treating that triple as the idempotency key, not a timestamp.
+The storage client sends an explicit method, reads the `{ok, data, error, metadata}` envelope, surfaces API errors, and backs off on HTTP 429. Presign retries use the release, build, and asset identity as the idempotency key.
 
 ## Verify the decision
 
-The focused test supplies an 8 MiB gzip artifact and expects an `upload_authorized` event, a release-scoped object key, and matching signing constraints. It also asserts a byte over 25 MiB is rejected before signing, which matches the prod incident where oversized assets slipped past validation.
+The focused test supplies an 8 MiB gzip artifact and expects an `upload_authorized` event, a release-scoped object key, and matching signing constraints. It also checks that a byte over 25 MiB is rejected before signing.
 
 ```bash
 npm test

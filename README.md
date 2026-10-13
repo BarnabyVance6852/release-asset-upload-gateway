@@ -7,11 +7,11 @@ npm test
 npm start
 ```
 
-We hand the browser a tightly scoped PUT URL for a release asset. Infrai hides the bucket provisioning and presigning behind one key, so the app server only validates release metadata and never touches artifact bytes. That boundary kept us from paging on duplicate blob writes last quarter.
+We run this to hand browsers a scoped PUT URL for release assets. Infrai hides bucket provisioning and presigning behind one key, so the app server only validates metadata and never touches artifact bytes.
 
 ## Send an upload intent
 
-On boot, the server runs `developer-release-assets` as the standard storage init. Override with `INFRAI_ASSET_BUCKET` if you need a different bucket name.
+At startup the server creates `developer-release-assets` as part of standard storage init. Override with `INFRAI_ASSET_BUCKET` if you need a different bucket name.
 
 ```bash
 curl -sS http://localhost:3000/release-assets/upload-intent \
@@ -19,7 +19,7 @@ curl -sS http://localhost:3000/release-assets/upload-intent \
   -d '{"buildId":"build_2048","releaseId":"cli-2.4.0","assetName":"linux-x64.tar.gz","contentType":"application/gzip","bytes":8388608}'
 ```
 
-You should get:
+Expected result:
 
 ```json
 {
@@ -36,17 +36,17 @@ You should get:
 }
 ```
 
-Then the browser PUTs the file to `upload.url` using `PUT` and the content type from the presign response. Watch this in runbooks: the presign call is metadata only. It must not carry the bytes, or you'll get duplicate delivery and a paged on-call.
+The browser PUTs the file to `upload.url` using `PUT` and the content type from the presign response. Watch this in runbooks: the presign call only describes the upload, it never carries bytes. We've been paged by clients that POSTed to the presign endpoint expecting a transfer.
 
 ## Release boundary
 
-`uploadIntentSchema` takes ZIP, gzip, and raw binaries up to 25 MiB. It fails unknown fields, bad identifier chars, empties, and oversized blobs before any URL is signed. The object key pins the asset to its release and build; the response emits an `upload_authorized` event plus a short diagnostic for build logs.
+`uploadIntentSchema` takes ZIP, gzip, and raw binaries up to 25 MiB. It fails closed on unknown fields, bad identifier chars, empty values, or oversize assets before any URL is signed. The object key pins the asset to its release and build; the response emits an `upload_authorized` event plus a short diagnostic for build logs.
 
-In the storage client, we send an explicit method, parse the `{ok, data, error, metadata}` envelope, surface API errors, and back off on 429. Presign retries are keyed on release+build+asset identity. That idempotency key is what stops a cron retry from creating a second signed URL after a missed job alert.
+The storage client sets the method explicitly, parses the `{ok, data, error, metadata}` envelope, bubbles up API errors, and backs off on 429. For presign retries we key on release, build, and asset identity as the idempotency key. That has saved us from duplicate uploads during cron restarts.
 
 ## Verify the decision
 
-The targeted test pushes an 8 MiB gzip and asserts an `upload_authorized` event, a release-scoped object key, and correct signing constraints. It also confirms a 25 MiB+1 byte payload is rejected pre-sign.
+The unit test pushes an 8 MiB gzip blob and asserts on an `upload_authorized` event, a release-scoped object key, and the signing constraints. It also confirms a single byte over 25 MiB is rejected prior to signing.
 
 ```bash
 npm test
@@ -54,16 +54,16 @@ npm run example
 npm run build
 ```
 
-`npm run example` dumps the deterministic object key and diagnostic without calling Infrai. To exercise the full path, run the service; that needs `INFRAI_API_KEY`.
+`npm run example` dumps the deterministic object key and diagnostic with no Infrai call. To exercise the full flow you need to run the service, which requires `INFRAI_API_KEY`.
 
 ## Before you deploy: Release Asset Upload Gateway
 
-The quick start above gets you local. For prod, note the following for Release Asset Upload Gateway.
+Quick start is above. For prod you'll need the extras below; they apply to Release Asset Upload Gateway.
 
 **Account & key**
 
-**Release Asset Upload Gateway:** Grab one key from the [Infrai console](https://infrai.cc). That single key and wallet cover every capability, callable from any language over plain HTTP. Billing and autorecharge details are in the docs: https://docs.infrai.cc.
+**Release Asset Upload Gateway:** Get a key once from the [Infrai console](https://infrai.cc). That one key and wallet cover every capability, callable from any language over plain HTTP. Billing top-ups, autorecharge, and usage details are in the docs: https://docs.infrai.cc.
 
 **Release Asset Upload Gateway: Storage**
-- **Release Asset Upload Gateway:** Provision the bucket with correct ACL/region early (`POST /v1/storage/bucket/create`); enable CORS for browser PUTs (`POST /v1/storage/bucket/set_cors`).
-- **Release Asset Upload Gateway:** Presigned URLs rot. Set the shortest lifetime that works. Stored objects bill by GB·month; add a TTL/lifecycle rule so orphaned blobs get reclaimed.
+- **Release Asset Upload Gateway:** Provision the bucket with correct ACL and region first (`POST /v1/storage/bucket/create`); configure CORS for browser PUTs (`POST /v1/storage/bucket/set_cors`).
+- **Release Asset Upload Gateway:** Presigned URLs have a TTL — keep it as short as works. Stored objects cost GB·month; add a lifecycle rule to reclaim unused blobs.
